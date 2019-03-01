@@ -77,14 +77,23 @@ namespace ZebraScannerService
 				_log.Debug("CoreScanner driver instance opened");
 			}
 
+			//// Setup SSH connection info for remote inventory database access
+			//ConnInfo = new ConnectionInfo("inventory", "tunet",
+			//	new AuthenticationMethod[] {
+			//		// Password based Authentication
+			//		new PasswordAuthenticationMethod("tunet","Pa$$word")
+			//	}
+			//);
+
 			// Setup SSH connection info for remote inventory database access
-			ConnInfo = new ConnectionInfo("inventory", "tunet",
+			ConnectionInfo ConnInfo = new ConnectionInfo("jmorrison", "jmorrison",
 				new AuthenticationMethod[] {
 					// Password based Authentication
-					new PasswordAuthenticationMethod("tunet","Pa$$word")
+					new PasswordAuthenticationMethod("jmorrison","Pa$$wordjm")
 				}
 			);
-			_log.Debug("Added SSH connection info: tunet@inventory");
+
+			//_log.Debug("Added SSH connection info: tunet@inventory");
 
 			//Get a List<IMotorolaBarcodeScanner> containing each connected scanner.
 			// Calls GetScanner API and returns formatted list of scanners
@@ -264,7 +273,8 @@ namespace ZebraScannerService
 			using (var sshclient = new SshClient(ConnInfo))
 			{
 				sshclient.Connect();
-				using (var cmd = sshclient.CreateCommand("python /var/www/scripts/autoscan.py" + location + " " + nid))
+				//using (var cmd = sshclient.CreateCommand("python3 /var/www/scripts/autoscan.py" + location + " " + nid))
+				using (var cmd = sshclient.CreateCommand("python3 /home/jmorrison/scanning-project/autoscan/dbtester.py " + location + " " + nid))
 				{
 					cmd.Execute();
 					Console.WriteLine("Command>" + cmd.CommandText);
@@ -302,34 +312,34 @@ namespace ZebraScannerService
 			scanner.Actions.ToggleLed(notificationParams.Item2);
 		}
 
-		// need to figure out which scanner the scan came from
-		public static void SendFailureNotification(uint scannerId)
-		{
-			IMotorolaBarcodeScanner scanner = GetScannerFromId(scannerId);
+		//// need to figure out which scanner the scan came from
+		//public static void SendFailureNotification(uint scannerId)
+		//{
+		//	IMotorolaBarcodeScanner scanner = GetScannerFromId(scannerId);
 
-			// if scanner DNE in list something has gone wrong. Rather try/catch then if null. 
+		//	// if scanner DNE in list something has gone wrong. Rather try/catch then if null. 
 
-			// send beep and flash indicating that the scan is not correct
-			scanner.Actions.SoundBeeper(BeepPattern.TwoHighShort);
+		//	// send beep and flash indicating that the scan is not correct
+		//	scanner.Actions.SoundBeeper(BeepPattern.TwoHighShort);
 
-			// flash LED
-			scanner.Actions.ToggleLed(LedMode.YellowOn);
-			Thread.Sleep(1000);
-			scanner.Actions.ToggleLed(LedMode.YellowOff);
-		}
+		//	// flash LED
+		//	scanner.Actions.ToggleLed(LedMode.YellowOn);
+		//	Thread.Sleep(1000);
+		//	scanner.Actions.ToggleLed(LedMode.YellowOff);
+		//}
 
-		// need to figure out which scanner the scan came from
-		public static void SendDatabaseNotification(uint scannerId)
-		{
-			IMotorolaBarcodeScanner scanner = GetScannerFromId(scannerId);
+		//// need to figure out which scanner the scan came from
+		//public static void SendDatabaseNotification(uint scannerId)
+		//{
+		//	IMotorolaBarcodeScanner scanner = GetScannerFromId(scannerId);
 
-			// if scanner DNE in list something has gone wrong. Rather try/catch then if null. 
+		//	// if scanner DNE in list something has gone wrong. Rather try/catch then if null. 
 
-			// flash LED
-			scanner.Actions.ToggleLed(LedMode.GreenOn);
-			Thread.Sleep(1000);
-			scanner.Actions.ToggleLed(LedMode.GreenOff);
-		}
+		//	// flash LED
+		//	scanner.Actions.ToggleLed(LedMode.GreenOn);
+		//	Thread.Sleep(1000);
+		//	scanner.Actions.ToggleLed(LedMode.GreenOff);
+		//}
 
 		public static IMotorolaBarcodeScanner GetScannerFromId(uint scannerId)
 		{
