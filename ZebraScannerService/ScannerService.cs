@@ -3,7 +3,6 @@ using System.Collections.Generic;
 //using System.Linq;
 //using System.Text;
 //using System.Threading.Tasks;
-using System.Timers;
 
 using System.Threading;
 using System.ComponentModel;
@@ -124,8 +123,9 @@ namespace ZebraScannerService
 			notifications.Add("barcodeFailure", Tuple.Create((LedMode?)LedMode.YellowOn, (LedMode?)LedMode.YellowOff, 300, (BeepPattern?)BeepPattern.OneLowLong));
 			//notifications.Add("barcodeSuccess", Tuple.Create((LedMode?)LedMode.GreenOn, (LedMode?)LedMode.GreenOff, 150, (BeepPattern?)null));
 			notifications.Add("databaseFailure", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 300, (BeepPattern?)BeepPattern.TwoLowLong));
-			notifications.Add("databaseSuccess", Tuple.Create((LedMode?)LedMode.GreenOn, (LedMode?)LedMode.GreenOff, 150, (BeepPattern?)null));
+			notifications.Add("tryDatabase", Tuple.Create((LedMode?)LedMode.GreenOn, (LedMode?)LedMode.GreenOff, 150, (BeepPattern?)null));
 			notifications.Add("genericScan", Tuple.Create((LedMode?)null, (LedMode?)null, 0, (BeepPattern?)BeepPattern.OneHighShort));
+			notifications.Add("deviceReserved", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 300, (BeepPattern?)BeepPattern.ThreeHighShort));
 
 			//invoke when program starts, method also invoked whenever a new scanner is connected
 			ConnectScanners();
@@ -206,6 +206,8 @@ namespace ZebraScannerService
 		// handles data 
 		private static void OnDataReceived(object sender, BarcodeScanEventArgs e)
 		{
+			SendNotification(e.ScannerId, notifications["genericScan"]);
+
 			// is it possible to define a new type of barcode?? Could avoid regular expressions altogether
 
 			_log.Debug("Barcode scan detected from scanner " + e.ScannerId + ": " + e.Data);
@@ -254,8 +256,8 @@ namespace ZebraScannerService
 					else if (location != null)
 					{
 						_timer.Stop();
-						SendNotification(e.ScannerId, notifications["databaseSuccess"]);
-						UpdateDatabase(e.ScannerId, location, barcode);
+						SendNotification(e.ScannerId, notifications["tryDatabase"]);
+						UpdateDatabase(e.ScannerId, barcode, location);
 						location = null;
 					}
 					else if (prevNid != null)
@@ -263,8 +265,8 @@ namespace ZebraScannerService
 						// case 3: location undefined, prevNid defined -> prevNid undefined
 						if (barcode == prevNid)
 						{
-							SendNotification(e.ScannerId, notifications["databaseSuccess"]);
-							UpdateDatabase(e.ScannerId, location, barcode);
+							SendNotification(e.ScannerId, notifications["tryDatabase"]);
+							UpdateDatabase(e.ScannerId, barcode);
 							prevNid = null;
 						}
 						// case 4: location undefined, prevNid defined -> prevNid defined (overwrite)
@@ -330,7 +332,7 @@ namespace ZebraScannerService
 			return match.Success;
 		}
 
-		public static void UpdateDatabase(uint scannerId, string location, string nid)
+		public static void UpdateDatabase(uint scannerId, string nid, string location = null)
 		{
 			// ************ consider passing timestamp as well so that there is consistency between logger and inventory ************
 
@@ -345,17 +347,37 @@ namespace ZebraScannerService
 					Console.WriteLine("Command>" + cmd.CommandText);
 					Console.WriteLine("Return Value = {0}", cmd.ExitStatus);
 
-					// consider adding different return codes
-					if (cmd.ExitStatus != 0)
+					// user or comment exists on device, so can't take it
+					if (cmd.ExitStatus == 3)
+					{
+						SendNotification(scannerId, notifications["deviceReserved"]);
+						// log
+					}
+					// could not connect to database, or could not commit to database, or something unexpected has occurred
+					else if (cmd.ExitStatus == 1 || cmd.ExitStatus == 2 || cmd.ExitStatus > 0)
 					{
 						// send notification from here so it's faster
 						SendNotification(scannerId, notifications["databaseFailure"]);
-						_log.Fatal("Error connecting to database or updating database with location=" + location + ", NID=" + nid);
+						if (location != null)
+						{
+							_log.Fatal("Error connecting to database or updating database with location=" + location + ", NID=" + nid);
+						}
+						else
+						{
+							_log.Fatal("Error connecting to database or removing NID=" + nid + " from database");
+						}
 					}
 					else
 					{
 						// **** fix this to ensure actually successful database update from autoscan.py
-						_log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+						if (location != null)
+						{
+							_log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+						}
+						else
+						{
+							_log.Debug("Successfully removed NID=" + nid + " from its location. Device is still in database, without a location");
+						}
 					}
 				}
 				sshclient.Disconnect();
