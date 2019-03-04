@@ -39,7 +39,7 @@ def setup_db():
         print("Connected to database")
     except sqlite3.Error as e:
         print("Error connecting to database: {}".format(e))
-        exit(400)
+        exit(1)
 
     return conn
 
@@ -73,9 +73,14 @@ def parse_socket(barcode):
         location_data['form'] = barcode[6:-3]
         location_data['voltage'] = barcode [-3:]
 
-    if re.match(lab_format, barcode):
+    elif re.match(lab_format, barcode):
         location_data['location'] = "xxxx"
         location_data['location_prefix'] = "L-"
+
+    else:
+        print("Location type not recognized")
+        # ***** this should never occur from barcode scanner that passes location ********
+        exit(4)
 
     return location_data
 
@@ -91,26 +96,24 @@ def remove_endpoint(db, nid):
     db.cursor().execute("UPDATE endpoints SET location='' WHERE network_id=?", (nid,))
     commit(db)
 
-def check_endpoint(db, nid, remove=False):
+def check_db_for_endpoint(db, nid):
+    n_rows = db.cursor().execute("SELECT COUNT(*) FROM endpoints WHERE network_id=?", (nid,)).fetchone()[0]  # input needs to be tuple 
+    return n_rows > 0
 
-    #check if there are aleady instances of this nid in the db
+def check_db_for_comment(db, nid):
+
+    #check if there is user/comment on nid
     query_result = db.cursor().execute("SELECT user, comment FROM endpoints WHERE network_id=?", (nid,)).fetchone()  # input needs to be tuple 
 
     print(query_result)
 
-    # if there is a comment and/or user attached to the device return error code 3 if trying to remove
-    if query_result and remove:
-        if (query_result[0] != None or query_result[1] != None):
-            print("Here I am")
-            exit(3)
-    # if not trying to remove, just return insert or update
-    else:
-        return (query_result == None)
-
-    return False
+    # if there is a comment and/or user attached to the device return error code 3
+    if query_result[0] or query_result[1]:
+        print("User or comment")
+        exit(3)
 
 #adds endpoint network ID and socket data to the database
-def add_endpoint(db, data, nid, nid_prefix, insert):
+def add_endpoint(db, data, nid, nid_prefix, nid_in_db):
 
     #some barcodes have leading characters indicating product type/id, check for those
     product_name, product_id = product_type_prefixes.get(nid_prefix,('',''))
@@ -118,7 +121,7 @@ def add_endpoint(db, data, nid, nid_prefix, insert):
     query_variables = (data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], product_name, product_id, nid)
     
     #if the nid exists, update it, if not, insert it
-    if not insert:
+    if nid_in_db:
         query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ?, product_name = ?, product_id = ? WHERE network_id = ?"
     else:
         query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, product_name, product_id, network_id) VALUES (?,?,?,?,?,?,?,?)"
@@ -138,6 +141,9 @@ if __name__=="__main__":
     nid = endpoint[-10:]
     nid_prefix = endpoint[:2]
 
+    nid_in_db = check_db_for_endpoint(db, nid)
+    print("nid in db: {}".format(nid_in_db))
+
     # if removing won't have location parameter
     try:
         location = sys.argv[2]
@@ -146,11 +152,10 @@ if __name__=="__main__":
         # if location holds multiple units, do not wipe socket
         if (location_data['location_prefix'] == "P-"):
             # # wipe any entries for that socket
-            wipe_socket(db, location_data)
-            
-        insert = check_endpoint(db, nid)
-        add_endpoint(db, location_data, nid, nid_prefix, insert)
-
+            wipe_socket(db, location_data)    
+        add_endpoint(db, location_data, nid, nid_prefix, nid_in_db)
     except IndexError:
-        check_endpoint(db, nid, remove=True)
-        remove_endpoint(db, nid)
+        # if nid not in db, do nothing
+        if nid_in_db:
+            check_db_for_comment(db, nid)
+            remove_endpoint(db, nid)
