@@ -34,6 +34,8 @@ namespace ZebraScannerService
 			return value.ToString();
 		}
 	}
+	// either needs to be declared outside ScannerService class, or inside and made public
+	enum BarcodeType { nid, location, None };
 
 	class ScannerService
 	{
@@ -43,6 +45,8 @@ namespace ZebraScannerService
 		// last location scanned - turn this into object maybe
 		private static string location;
 		private static string prevNid;
+
+		private static Tuple<string, BarcodeType> prevScan;
 
 		private static bool _scannerAttached;
 
@@ -62,7 +66,7 @@ namespace ZebraScannerService
 		public void Start()
 		{
 			_timer.Elapsed += OnTimerElapsed;
-			// add logging functionality
+			// configure logging
 			XmlConfigurator.Configure();
 
 			//First open an instance of the CoreScanner driver.
@@ -88,7 +92,7 @@ namespace ZebraScannerService
 			//);
 
 			// Setup SSH connection info for remote inventory database access
-			ConnectionInfo ConnInfo = new ConnectionInfo("jmorrison", "jmorrison",
+			ConnInfo = new ConnectionInfo("jmorrison", "jmorrison",
 				new AuthenticationMethod[] {
 					// Password based Authentication
 					new PasswordAuthenticationMethod("jmorrison","Pa$$wordjm")
@@ -107,7 +111,7 @@ namespace ZebraScannerService
 			// onBarcodeData invokes DataReceived.
 			// then call ExecCommand on CoreScanner internal
 
-			// ***** check to see if I need other event types
+			// Pnp event occurs when scanner attaches/detaches from system
 			BarcodeScannerManager.Instance.RegisterForEvents(EventType.Barcode, EventType.Pnp);
 
 			BarcodeScannerManager.Instance.ScannerAttached += Instance_ScannerAttached;
@@ -130,20 +134,20 @@ namespace ZebraScannerService
 			//invoke when program starts, method also invoked whenever a new scanner is connected
 			ConnectScanners();
 
-			Console.WriteLine("ready to scan");
+			//Console.WriteLine("ready to scan");
 			//Console.ReadLine();
 			//_timer.Start();
 		}
 
 		public void Stop() {
-			//_timer.Stop();
+			BarcodeScannerManager.Instance.Close();
 		}
 
 		private static void Instance_ScannerAttached(object sender, PnpEventArgs e)
 		{
 			_scannerAttached = true;
 			// change the scanner mode if necessary
-			//ConnectScanners();
+			ConnectScanners();
 			// update the global scanner list
 			//_scanners = BarcodeScannerManager.Instance.GetDevices();
 
@@ -172,7 +176,7 @@ namespace ZebraScannerService
 
 				if (scanner.Info.UsbHostMode != HostMode.USB_OPOS)
 				{
-					_log.Error("Failed to set scanner id=" + scanner.Info.ScannerId + " To USB OPOS mode. Retrying...");
+					_log.Error("Failed to set scanner id=" + scanner.Info.ScannerId + " to USB OPOS mode. Retrying...");
 					scanner.SetHostMode(HostMode.USB_OPOS, true);
 
 					// not sure why this is here... perhaps for connection issues.
@@ -199,9 +203,114 @@ namespace ZebraScannerService
 		{
 			// user didn't scan nid in time. Either prevNid or location is set; nullify both
 			// case 9/10 : either defined -> both undefined.
-			location = prevNid = null;
+			prevScan = null;
 			Console.WriteLine("timer up!");
 		}
+
+		// handles data 
+		//private static void OnDataReceived(object sender, BarcodeScanEventArgs e)
+		//{
+		//	SendNotification(e.ScannerId, notifications["genericScan"]);
+
+		//	// is it possible to define a new type of barcode?? Could avoid regular expressions altogether
+
+		//	_log.Debug("Barcode scan detected from scanner " + e.ScannerId + ": " + e.Data);
+
+		//	Console.WriteLine("Barcode type: " + e.BarcodeType.GetDescription());
+		//	Console.WriteLine("Data: " + e.Data);
+
+		//	// convert barcode to uppercase and strip any whitespace
+		//	string barcode = e.Data.ToUpper().Trim();
+
+		//	string barcodeType = CheckBarcode(barcode);
+
+		//	if (string.IsNullOrEmpty(barcodeType))
+		//	{
+		//		_log.Error("Barcode " + e.Data + " not recognized as location or NID");
+		//		SendNotification(e.ScannerId, notifications["barcodeFailure"]);
+		//	}
+		//	else
+		//	{
+		//		// if successful scan, then either stop timer or restart start it, so stop here.
+		//		// stopping timer avoids potential race condition
+		//		_timer.Stop();
+		//		_log.Debug("Barcode " + barcode + " recognized as type " + barcodeType);
+
+		//		// case 1: location undefined, prevNid undefined -> location defined
+		//		// case 6/7: location defined, prevNid undefined -> location defined (overwrite)
+		//		// case 5: location undefined, prevNid defined -> location defined, prevNid undefined
+		//		if (barcodeType.Equals("location"))
+		//		{
+		//			_timer.Start();
+		//			location = barcode;
+		//			// if prevNid was defined, means nid got scanned before barcode. Want location first, so just write location and nullify prevNid
+		//			prevNid = null;
+		//		}
+		//		else
+		//		{
+		//			if (prevNid == null)
+		//			{
+		//				// case 2: location undefined, prevNid undefined -> prevNid defined
+		//				if (location == null)
+		//				{
+		//					_timer.Start();
+		//					prevNid = barcode;
+		//				}
+		//				// location and nid scanned: reset timer, update database, remove location
+		//				// case 8: location defined, prevNid undefined -> location undefined
+		//				else
+		//				{
+		//					_timer.Stop();
+		//					SendNotification(e.ScannerId, notifications["tryDatabase"]);
+		//					UpdateDatabase(e.ScannerId, barcode, location);
+		//					location = null;
+		//				}
+		//			}
+		//			else
+		//			{
+		//				// case 3: location undefined, prevNid defined -> prevNid undefined
+		//				if (barcode == prevNid)
+		//				{
+		//					SendNotification(e.ScannerId, notifications["tryDatabase"]);
+		//					UpdateDatabase(e.ScannerId, barcode);
+		//					prevNid = null;
+		//				}
+		//				// case 4: location undefined, prevNid defined -> prevNid defined (overwrite)
+		//				else
+		//				{
+		//					_timer.Start();
+		//					prevNid = barcode;
+		//				}
+		//				// send notification that the nid scanned is not the same as the previous one
+		//			}
+		//		}
+		//	}
+
+		//	//if (string.IsNullOrEmpty(barcodeType) || barcodeType.Equals("nid") && string.IsNullOrEmpty(location))
+		//	//{
+		//	//	SendNotification(e.ScannerId, notifications["barcodeFailure"]);
+		//	//}
+		//	//else
+		//	//{
+		//	//	SendNotification(e.ScannerId, notifications["barcodeSuccess"]);
+
+		//	//	// start timer waiting for nid
+		//	//	if (barcodeType.Equals("location"))
+		//	//	{
+
+		//	//	}
+		//	//	// barcode is NID and location has been previously entered - update database
+		//	//	else
+		//	//	{
+		//	//		SendNotification(e.ScannerId, notifications["databaseSuccess"]);
+		//	//		UpdateDatabase(e.ScannerId, location, barcode);
+
+		//	//		// set location to null - shouldn't be allowed to have 2 nids at same location
+		//	//		// fix this to account for programming lab ????????
+		//	//		location = null;
+		//	//	}
+		//	//}
+		//}
 
 		// handles data 
 		private static void OnDataReceived(object sender, BarcodeScanEventArgs e)
@@ -218,9 +327,9 @@ namespace ZebraScannerService
 			// convert barcode to uppercase and strip any whitespace
 			string barcode = e.Data.ToUpper().Trim();
 
-			string barcodeType = CheckBarcode(barcode);
+			BarcodeType barcodeType = CheckBarcode(barcode);
 
-			if (string.IsNullOrEmpty(barcodeType))
+			if (barcodeType == BarcodeType.None)
 			{
 				_log.Error("Barcode " + e.Data + " not recognized as location or NID");
 				SendNotification(e.ScannerId, notifications["barcodeFailure"]);
@@ -232,96 +341,93 @@ namespace ZebraScannerService
 				_timer.Stop();
 				_log.Debug("Barcode " + barcode + " recognized as type " + barcodeType);
 
-				// case 1: location undefined, prevNid undefined -> location defined
-				// case 6/7: location defined, prevNid undefined -> location defined (overwrite)
-				// case 5: location undefined, prevNid defined -> location defined, prevNid undefined
-				if (barcodeType.Equals("location"))
+				// case 1: prevScan: null		current: nid1 		-> prevScan: nid1		timer: start	()
+				// case 2: prevScan: null		current: location1	-> prevScan: location1	timer: start	()	 
+				// case 3: prevScan: nid1		current: nid1		-> prevScan: null		timer: stop		(remove nid's location from database)				
+				// case 4: prevScan: nid1		current: nid2		-> prevScan: nid2		timer: start	(overwrite previous nid with new prevScan nid)
+				// case 5: prevScan: nid1		current: location1	-> prevScan: location1	timer: start	(nid scanned first - overwrite with location)
+				// case 6: prevScan: location1	current: location1	-> prevScan: location1	timer: start	(overwrite same location)
+				// case 7: prevScan: location1	current: location2 	-> prevScan: location2	timer: start	(overwrite new location)
+				// case 8: prevScan: location1	current: nid1 		-> prevScan: null		timer: start	(update nid's location in database)
+
+				// cases 1 and 2
+				if (prevScan == null)
 				{
 					_timer.Start();
-					location = barcode;
-					// if prevNid was defined, means nid got scanned before barcode. Want location first, so just write location and nullify prevNid
-					prevNid = null;
+					prevScan = Tuple.Create(barcode, barcodeType);
 				}
-				else
+				// cases 5,6,7
+				else if (barcodeType == BarcodeType.location)
 				{
-					// case 2: location undefined, prevNid undefined -> prevNid defined
-					if (prevNid == null)
+					_timer.Start();
+					prevScan = Tuple.Create(barcode, barcodeType);
+				}
+				else 
+				{
+					if (prevScan.Item2 == BarcodeType.nid)
 					{
-						_timer.Start();
-						prevNid = barcode;
-						location = null;
-					}
-					// location and nid scanned: reset timer, update database, remove location
-					// case 8: location defined, prevNid undefined -> location undefined
-					else if (location != null)
-					{
-						_timer.Stop();
-						SendNotification(e.ScannerId, notifications["tryDatabase"]);
-						UpdateDatabase(e.ScannerId, barcode, location);
-						location = null;
-					}
-					else if (prevNid != null)
-					{
-						// case 3: location undefined, prevNid defined -> prevNid undefined
-						if (barcode == prevNid)
+						// case 3
+						if (barcode.Equals(prevScan.Item1))
 						{
 							SendNotification(e.ScannerId, notifications["tryDatabase"]);
 							UpdateDatabase(e.ScannerId, barcode);
-							prevNid = null;
+							prevScan = null;
 						}
-						// case 4: location undefined, prevNid defined -> prevNid defined (overwrite)
+						// case 4
 						else
 						{
 							_timer.Start();
-							prevNid = barcode;
+							prevScan = Tuple.Create(barcode, barcodeType);
 						}
-						// send notification that the nid scanned is not the same as the previous one
+					}
+					// case 8
+					else
+					{
+						SendNotification(e.ScannerId, notifications["tryDatabase"]);
+						location = prevScan.Item1;
+						UpdateDatabase(e.ScannerId, barcode, location);
+						prevScan = null;
 					}
 				}
 			}
-
-			//if (string.IsNullOrEmpty(barcodeType) || barcodeType.Equals("nid") && string.IsNullOrEmpty(location))
-			//{
-			//	SendNotification(e.ScannerId, notifications["barcodeFailure"]);
-			//}
-			//else
-			//{
-			//	SendNotification(e.ScannerId, notifications["barcodeSuccess"]);
-
-			//	// start timer waiting for nid
-			//	if (barcodeType.Equals("location"))
-			//	{
-
-			//	}
-			//	// barcode is NID and location has been previously entered - update database
-			//	else
-			//	{
-			//		SendNotification(e.ScannerId, notifications["databaseSuccess"]);
-			//		UpdateDatabase(e.ScannerId, location, barcode);
-
-			//		// set location to null - shouldn't be allowed to have 2 nids at same location
-			//		// fix this to account for programming lab ????????
-			//		location = null;
-			//	}
-			//}
 		}
 
 		// returns "nid" if barcode scanned is recognized as NID, and "location" if recognized as location
-		public static string CheckBarcode(string barcode)
+		//public static string CheckBarcode(string barcode)
+		//{
+		//	string locationOrNid = "";
+		//	string locationFormat = @"^P[NESW]\d{4}";
+		//	string nidFormat = @"^\d{10}$";
+
+		//	if (EvalRegex(locationFormat, barcode))
+		//	{
+		//		locationOrNid = "location";
+		//	}
+		//	else if (EvalRegex(nidFormat, barcode))
+		//	{
+		//		locationOrNid = "nid";
+		//	}
+		//	return locationOrNid;
+		//}
+
+		// returns "nid" if barcode scanned is recognized as NID, and "location" if recognized as location
+		public static BarcodeType CheckBarcode(string barcode)
 		{
-			string locationOrNid = "";
 			string locationFormat = @"^P[NESW]\d{4}";
 			string nidFormat = @"^\d{10}$";
 
 			if (EvalRegex(locationFormat, barcode))
 			{
-				locationOrNid = "location";
+				return BarcodeType.location;
 			}
 			else if (EvalRegex(nidFormat, barcode))
 			{
-				locationOrNid = "nid";
+				return BarcodeType.nid;
 			}
-			return locationOrNid;
+			else
+			{
+				return BarcodeType.None;
+			}
 		}
 
 		public static Boolean EvalRegex(string rxStr, string matchStr)
@@ -334,14 +440,13 @@ namespace ZebraScannerService
 
 		public static void UpdateDatabase(uint scannerId, string nid, string location = null)
 		{
-			// ************ consider passing timestamp as well so that there is consistency between logger and inventory ************
-
 			// Execute a (SHELL) Command that runs python script to update database
 			using (var sshclient = new SshClient(ConnInfo))
 			{
 				sshclient.Connect();
+				// C# will convert null string to empty in concatenation
 				//using (var cmd = sshclient.CreateCommand("python3 /var/www/scripts/autoscan.py" + location + " " + nid))
-				using (var cmd = sshclient.CreateCommand("python3 /home/jmorrison/scanning-project/autoscan/dbtester.py " + location + " " + nid))
+				using (var cmd = sshclient.CreateCommand("python3 /home/jmorrison/scanning-project/autoscan/dbtester.py " + nid + location))
 				{
 					cmd.Execute();
 					Console.WriteLine("Command>" + cmd.CommandText);
