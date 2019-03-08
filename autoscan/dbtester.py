@@ -25,14 +25,16 @@ product_type_prefixes = {
     'T6' : ('TC-1220-RD', '42'),
     'TQ' : ('PP-1316', '12'),
     'X1' : ('XR-3100', '14'),
-    'TD' : ('ERT', '') #<<this one may or may not be a thing
+    # dummy ERT for now
+    'ERT': ('ERT', '')
 }
 
 #attempts to connect to database
 def setup_db():
     try:
     # 	#conn = sqlite3.connect('/var/www/inventory.db')
-        conn = sqlite3.connect('/home/jmorrison/inventory-UI-and-scripts/inventory_tester.db')
+        #conn = sqlite3.connect('/home/jmorrison/inventory-UI-and-scripts/inventory_tester.db')
+        conn = sqlite3.connect('D:\Coding-Projects\inventory-tester-environment\inventory_tester.db')
         # cursor = conn.cursor()
         # cursor.execute("SELECT name from sqlite_master WHERE type='table';")
         # print(cursor.fetchall())
@@ -84,6 +86,7 @@ def parse_socket(barcode):
 
     return location_data
 
+# for now we won't use this method - can have multiple at location
 def wipe_socket(db, location_data):
     ## should there be different behaviour for different locations?? EG programming lab
 
@@ -116,8 +119,9 @@ def check_db_for_comment(db, nid):
 def add_endpoint(db, data, nid, nid_prefix, nid_in_db):
 
     #some barcodes have leading characters indicating product type/id, check for those
-    product_name, product_id = product_type_prefixes.get(nid_prefix,('',''))
-    
+    if nid_prefix:
+        product_name, product_id = product_type_prefixes.get(nid_prefix,('',''))
+
     query_variables = (data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], product_name, product_id, nid)
     
     #if the nid exists, update it, if not, insert it
@@ -139,7 +143,15 @@ if __name__=="__main__":
     endpoint = sys.argv[1]
     #chop the barcode so it's just the nid
     nid = endpoint[-10:]
-    nid_prefix = endpoint[:2]
+    # Expect 12 digits for most products
+    # 10 digits might be WAN NID, could also be ERT type+id
+    # 8 digits is ERT
+    if len(nid) == 12:
+        nid_prefix = endpoint[:2] 
+    elif len(nid) == 8:
+        nid_prefix = 'ERT'
+    else:
+        nid_prefix = None
 
     nid_in_db = check_db_for_endpoint(db, nid)
     print("nid in db: {}".format(nid_in_db))
@@ -150,9 +162,9 @@ if __name__=="__main__":
         # # parse location into dictionary
         location_data = parse_socket(location)
         # if location holds multiple units, do not wipe socket
-        if (location_data['location_prefix'] == "P-"):
+        # if (location_data['location_prefix'] == "P-"):
             # # wipe any entries for that socket
-            wipe_socket(db, location_data)    
+            # wipe_socket(db, location_data)    
         add_endpoint(db, location_data, nid, nid_prefix, nid_in_db)
     except IndexError:
         # if nid not in db, do nothing
