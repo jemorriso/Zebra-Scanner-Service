@@ -33,8 +33,8 @@ product_type_prefixes = {
 def setup_db():
     try:
     # 	#conn = sqlite3.connect('/var/www/inventory.db')
-        #conn = sqlite3.connect('/home/jmorrison/inventory-UI-and-scripts/inventory_tester.db')
-        conn = sqlite3.connect('D:\Coding-Projects\inventory-tester-environment\inventory_tester.db')
+        conn = sqlite3.connect('/home/jmorrison/inventory-tester-environment/inventory_tester.db')
+        #conn = sqlite3.connect('D:\Coding-Projects\inventory-tester-environment\inventory_tester.db')
         # cursor = conn.cursor()
         # cursor.execute("SELECT name from sqlite_master WHERE type='table';")
         # print(cursor.fetchall())
@@ -65,7 +65,7 @@ def parse_socket(barcode):
     }
     
     pillar_format = r'P[NESW][\d]{4}'
-    lab_format = r'Lab Stock Area'
+    # lab_format = r'Lab Stock Area'
 
     print(re.match(pillar_format, barcode))
     #if on a pillar - do I need others?
@@ -75,9 +75,9 @@ def parse_socket(barcode):
         location_data['form'] = barcode[6:-3]
         location_data['voltage'] = barcode [-3:]
 
-    elif re.match(lab_format, barcode):
-        location_data['location'] = "xxxx"
-        location_data['location_prefix'] = "L-"
+    # elif re.match(lab_format, barcode):
+    #     location_data['location'] = "xxxx"
+    #     location_data['location_prefix'] = "L-"
 
     else:
         print("Location type not recognized")
@@ -117,18 +117,33 @@ def check_db_for_comment(db, nid):
 
 #adds endpoint network ID and socket data to the database
 def add_endpoint(db, data, nid, nid_prefix, nid_in_db):
+    print("nid prefix: {}".format(nid_prefix))
+
+    query_variables = [data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], nid]
 
     #some barcodes have leading characters indicating product type/id, check for those
     if nid_prefix:
         product_name, product_id = product_type_prefixes.get(nid_prefix,('',''))
+        query_variables.insert(-1, product_name)
+        query_variables.insert(-1, product_id)
 
-    query_variables = (data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], product_name, product_id, nid)
-    
+
+    #query_variables = [data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], product_name if product_name, product_id if product_id, nid]
+
     #if the nid exists, update it, if not, insert it
     if nid_in_db:
-        query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ?, product_name = ?, product_id = ? WHERE network_id = ?"
+        if nid_prefix:
+            query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ?, product_name = ?, product_id = ? WHERE network_id = ?"
+        else:
+            query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ? WHERE network_id = ?"
+
     else:
-        query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, product_name, product_id, network_id) VALUES (?,?,?,?,?,?,?,?)"
+        if nid_prefix:
+            query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, product_name, product_id, network_id) VALUES (?,?,?,?,?,?,?,?)"
+        else:
+            query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, network_id) VALUES (?,?,?,?,?,?)"
+
+
     
     print(query)
     # #run query
@@ -146,12 +161,14 @@ if __name__=="__main__":
     # Expect 12 digits for most products
     # 10 digits might be WAN NID, could also be ERT type+id
     # 8 digits is ERT
-    if len(nid) == 12:
+    if len(endpoint) == 12:
         nid_prefix = endpoint[:2] 
-    elif len(nid) == 8:
+    elif len(endpoint) == 8:
         nid_prefix = 'ERT'
     else:
         nid_prefix = None
+
+    print("nid prefix: {}".format(nid_prefix))
 
     nid_in_db = check_db_for_endpoint(db, nid)
     print("nid in db: {}".format(nid_in_db))
@@ -169,5 +186,6 @@ if __name__=="__main__":
     except IndexError:
         # if nid not in db, do nothing
         if nid_in_db:
-            check_db_for_comment(db, nid)
+            # make a better version using new schema
+            #check_db_for_comment(db, nid)
             remove_endpoint(db, nid)
