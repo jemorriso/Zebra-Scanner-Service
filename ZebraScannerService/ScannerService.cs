@@ -15,6 +15,7 @@ using System.Reflection;
 
 namespace ZebraScannerService
 {
+	// class handles current scanner info related to inventory
 	public class ScannerInfo
 	{
 		public IMotorolaBarcodeScanner scanner;
@@ -23,7 +24,7 @@ namespace ZebraScannerService
 		public Tuple<string, BarcodeType> prevScan;
 	}
 
-	// define timer class that accepts scanner id and led mode so event handler has access to these fields
+	// timer class accepts scanner id and led mode so event handler has access to these fields
 	public class ScannerTimer : System.Timers.Timer
 	{
 		public int scannerId;
@@ -36,15 +37,14 @@ namespace ZebraScannerService
 	class ScannerService
 	{
 		private static ConnectionInfo ConnInfo;
-		private static readonly ILog _log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
+		private static ILog _log;
+		private static SshClient sshclient;
 
-		private static Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>> notifications = new Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>>();
-		// convert assigned prefix back into scanner ID
+		private static Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>> notifications;
 		private static Dictionary<int, int> prefixes;
-		//private static ScannerTimer _scanTimer;
 		private static Dictionary<int, ScannerInfo> scanners;
-		//private static Tuple<string, BarcodeType> prevScan;
 
+		// set behaviour of scanners
 		public static void ConfigureScanners()
 		{
 			int asciiPrefix = 0x61;
@@ -55,8 +55,17 @@ namespace ZebraScannerService
 			prefixes = new Dictionary<int, int>();
 			scanners = new Dictionary<int, ScannerInfo>();
 
+			List<IMotorolaBarcodeScanner> deviceList = BarcodeScannerManager.Instance.GetDevices();
+			// Ensure scanners are attached
+			if (deviceList.Count == 0)
+			{
+				_log.Error("No scanners are attached.");
+
+				_log.Error("No scanners are attached.");
+				return;
+			}
 			// want: multipoint-point, low volume, beep / flash green on good decode, mode IBMHID, assign prefix
-			foreach (var scanner in BarcodeScannerManager.Instance.GetDevices())
+			foreach (var scanner in deviceList)
 			{
 				// if cradle
 				if (scanner.Info.ModelNumber == "CR0078-SC10007WR")
@@ -87,7 +96,6 @@ namespace ZebraScannerService
 					scanner.Actions.StoreIBMAttribute(105, DataType.Array, asciiPrefix);
 
 					prefixes.Add(asciiPrefix, scanner.Info.ScannerId);
-					//timers.Add((uint)scanner.Info.ScannerId, null);
 					scanners.Add(
 						scanner.Info.ScannerId,
 						new ScannerInfo
@@ -106,6 +114,7 @@ namespace ZebraScannerService
 		public void Start()
 		{
 			// Setup logging
+			_log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
 			XmlConfigurator.Configure();
 
 			if (!(BarcodeScannerManager.Instance.Open()))
@@ -126,13 +135,18 @@ namespace ZebraScannerService
 			//);
 			//_log.Debug("Added SSH connection info: jmorrison@jmorrison");
 
-			// Setup SSH connection info for remote inventory database access
-			ConnInfo = new ConnectionInfo("inventory", "tunet",
-				new AuthenticationMethod[] {
+			//Setup SSH connection info for remote inventory database access
+
+		   ConnInfo = new ConnectionInfo("inventory", "tunet",
+			   new AuthenticationMethod[] {
 					// Password based Authentication
 					new PasswordAuthenticationMethod("tunet","tunet")
-				}
-			);
+			   }
+		   );
+
+			//sshclient = new SshClient(ConnInfo);
+			sshclient = new SshClient(ConnInfo);
+			CheckSSHConnection();
 			_log.Debug("Added SSH connection info: tunet@inventory");
 
 			BarcodeScannerManager.Instance.RegisterForEvents(EventType.Barcode, EventType.Pnp);
@@ -142,33 +156,55 @@ namespace ZebraScannerService
 			_log.Debug("Subscribed for events in BarcodeScannerManager: CCoreScanner.Barcode, CCoreScanner.Pnp");
 			_log.Debug("Subscribed for events in Main: BarcodeScannerManager.ScannerAttached, BarcodeScannerManager.ScannerDetached");
 
-			notifications.Add("tryDatabase", Tuple.Create((LedMode?)LedMode.GreenOn, (LedMode?)LedMode.GreenOff, 1500, (BeepPattern?)null));
-			notifications.Add("timerUp", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 50, (BeepPattern?)BeepPattern.TwoLowShort));
-			notifications.Add("barcodeFailure", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 100, (BeepPattern?)BeepPattern.OneLowLong));
-			notifications.Add("databaseFailure", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 300, (BeepPattern?)BeepPattern.ThreeLowLong));
-
+			// Add notification beep flash / sequences to notifications dictionary
+			notifications = new Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>>
+			{
+				{ "tryDatabase", Tuple.Create((LedMode?)LedMode.GreenOn, (LedMode?)LedMode.GreenOff, 1500, (BeepPattern?)null) },
+				{ "timerUp", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 50, (BeepPattern?)BeepPattern.TwoLowShort) },
+				{ "barcodeFailure", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 100, (BeepPattern?)BeepPattern.OneLowLong) },
+				{ "databaseFailure", Tuple.Create((LedMode?)LedMode.RedOn, (LedMode?)LedMode.RedOff, 300, (BeepPattern?)BeepPattern.ThreeLowLong) }
+			};
 			ConfigureScanners();
 		}
 
 		public void Stop()
 		{
 			_log.Debug("Zebra Scanner Service stopped");
+			sshclient.Disconnect();
 			BarcodeScannerManager.Instance.Close();
 		}
-		// PnpEventArgs doesn't have scanner serial
-		// there is no way of telling which scanner attached / detached
+		// PnpEventArgs: there is no way of telling which scanner attached / detached
 		private static void OnScannerAttached(object sender, PnpEventArgs e)
 		{
 			_log.Debug("Scanner attached");
+			// every time scanner is attached, reconfigure all scanners, because there is no guarantee that scanner that has
+			// previously detached has the same id when it reattaches, and we don't have the id of the scanner that has attached.
 			ConfigureScanners();
-			Console.WriteLine("Scanner id=" + e.ScannerId + " attached");
 		}
 
 		private static void OnScannerDetached(object sender, PnpEventArgs e)
 		{
 			_log.Debug("Scanner detached");
+		}
 
-			Console.WriteLine("Scanner id=" + e.ScannerId + " detached");
+		private static void OnScanTimerElapsed(Object source, System.Timers.ElapsedEventArgs e)
+		{
+			// user didn't scan nid in time. 
+			// case 9/10 : prevScan defined -> undefined
+			Console.WriteLine("timer up!");
+			_log.Error("Timed out waiting for barcode scan event");
+
+			SendNotification(((ScannerTimer)source).scannerId, notifications["timerUp"]);
+			scanners[((ScannerTimer)source).scannerId].prevScan = null;
+		}
+
+		// Handles LED timer elapsed event by getting LED colour that was toggled on when LED timer was created, and turning that colour off.
+		private static void OnLedTimerElapsed(Object source, System.Timers.ElapsedEventArgs e)
+		{
+			LedMode ledOff = (LedMode)((ScannerTimer)source).ledOff;
+			IMotorolaBarcodeScanner scanner = scanners[((ScannerTimer)source).scannerId].scanner;
+
+			scanner.Actions.ToggleLed(ledOff);
 		}
 
 		private static void OnDataReceived(object sender, BarcodeScanEventArgs e)
@@ -192,7 +228,6 @@ namespace ZebraScannerService
 			else
 			{
 				// if successful scan, then either stop timer or restart start it, so stop here.
-				// stopping timer avoids potential race condition
 				if (scanners[scannerId].timer != null)
 				{
 					scanners[scannerId].timer.Stop();
@@ -260,36 +295,19 @@ namespace ZebraScannerService
 			}
 		}
 
-		private static void OnScanTimerElapsed(Object source, System.Timers.ElapsedEventArgs e)
-		{
-			// user didn't scan nid in time. 
-			// case 9/10 : prevScan defined -> undefined
-			Console.WriteLine("timer up!");
-			_log.Error("Timed out waiting for barcode scan event");
-
-			SendNotification(((ScannerTimer)source).scannerId, notifications["timerUp"]);
-			scanners[((ScannerTimer)source).scannerId].prevScan = null;
-		}
-
-		private static void OnLedTimerElapsed(Object source, System.Timers.ElapsedEventArgs e)
-		{
-			LedMode ledOff = (LedMode)((ScannerTimer)source).ledOff;
-			IMotorolaBarcodeScanner scanner = scanners[((ScannerTimer)source).scannerId].scanner;
-
-			scanner.Actions.ToggleLed(ledOff);
-		}
-
 		// returns "nid" if barcode scanned is recognized as NID, and "location" if recognized as location
 		public static BarcodeType CheckBarcode(string barcode)
 		{
 			string locationFormat = @"^P[NESW]\d{4}";
 			string nidFormat = @"(\d|[A-F]){10}$";
+			string ertFormat = @"\d{8}$";
 
 			if (EvalRegex(locationFormat, barcode))
 			{
 				return BarcodeType.location;
 			}
-			else if (EvalRegex(nidFormat, barcode))
+			// ert NID is just treated as regular NID by this program
+			else if (EvalRegex(nidFormat, barcode) || EvalRegex(ertFormat, barcode))
 			{
 				return BarcodeType.nid;
 			}
@@ -325,7 +343,6 @@ namespace ZebraScannerService
 				{
 					Interval = notificationParams.Item3,
 					AutoReset = false,
-					//scannerId = scannerCradleId,
 					scannerId = scanner.Info.ScannerId,
 					ledOff = (LedMode)notificationParams.Item2
 				};
@@ -334,68 +351,76 @@ namespace ZebraScannerService
 			}
 		}
 
+		// ensure SSH tunnel is established. If can't connect log error and stop service
+		public static bool CheckSSHConnection()
+		{
+			if (!sshclient.IsConnected)
+			{
+				try
+				{
+					sshclient.Connect();
+				}
+				catch (Renci.SshNet.Common.SshConnectionException e)
+				{
+					_log.Fatal("Error establishing connection to inventory server.");
+					return false;
+				}
+			}
+			return true;
+		}
+
 		public static void UpdateDatabase(int scannerId, string nid, string location = null)
 		{
-			// Execute a (SHELL) Command that runs python script to update database
-			using (var sshclient = new SshClient(ConnInfo))
+			if (!CheckSSHConnection())
 			{
-				Console.WriteLine("test connect");
-				sshclient.Connect();
-				Console.WriteLine("test connect");
+				SendNotification(scannerId, notifications["databaseFailure"]);
+			}
+			using (var cmd = sshclient.CreateCommand("python3 /home/tunet/jmorrison/autoscan.py " + nid + " " + location))
+			{
+				cmd.Execute();
 
+				Console.WriteLine("Command>" + cmd.CommandText);
+				Console.WriteLine("Return Value = {0}", cmd.ExitStatus);
+				// user or comment exists on device, so can't take it
+				//if (cmd.ExitStatus == 3)
+				//{
+				//	Console.WriteLine("failed to update db");
+				//	//SendNotification(scannerId, notifications["deviceReserved"]);
+				//	// log
+				//}
 
-				// C# will convert null string to empty in concatenation
-				//using (var cmd = sshclient.CreateCommand("python3 /var/www/scripts/autoscan.py" + location + " " + nid))
-				//using (var cmd = sshclient.CreateCommand("python3 /home/jmorrison/Zebra-Scanner-Service/autoscan/autoscan.py " + nid + " " + location))
-				using (var cmd = sshclient.CreateCommand("python3 /home/tunet/jmorrison/autoscan.py " + nid + " " + location))
+				if (cmd.ExitStatus > 0)
 				{
-					cmd.Execute();
-
-					Console.WriteLine("Command>" + cmd.CommandText);
-					Console.WriteLine("Return Value = {0}", cmd.ExitStatus);
-					// user or comment exists on device, so can't take it
-					//if (cmd.ExitStatus == 3)
-					//{
-					//	Console.WriteLine("failed to update db");
-					//	//SendNotification(scannerId, notifications["deviceReserved"]);
-					//	// log
-					//}
-
-					if (cmd.ExitStatus > 0)
+					SendNotification(scannerId, notifications["databaseFailure"]);
+					// could not connect to database, or could not commit to database, or something unexpected has occurred
+					if (cmd.ExitStatus == 1)
 					{
-						// send notification from here so it's faster
-						SendNotification(scannerId, notifications["databaseFailure"]);
-						// could not connect to database, or could not commit to database, or something unexpected has occurred
-						if (cmd.ExitStatus == 1)
-						{
-							Console.WriteLine("failed to update db");
-							_log.Fatal("Error connecting to database.");
-						}
-						else if (cmd.ExitStatus == 2 || cmd.ExitStatus > 0)
-						{
-							if (location != null)
-							{
-								_log.Fatal("Error updating database with location=" + location + ", NID=" + nid);
-							}
-							else
-							{
-								_log.Fatal("Error removing NID=" + nid + " location info from database");
-							}
-						}
+						Console.WriteLine("failed to update db");
+						_log.Fatal("Error connecting to database.");
 					}
-					else
+					else if (cmd.ExitStatus == 2 || cmd.ExitStatus > 0)
 					{
 						if (location != null)
 						{
-							_log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+							_log.Fatal("Error updating database with location=" + location + ", NID=" + nid);
 						}
 						else
 						{
-							_log.Debug("Successfully removed location info for NID=" + nid);
+							_log.Fatal("Error removing NID=" + nid + " location info from database");
 						}
 					}
 				}
-				sshclient.Disconnect();
+				else
+				{
+					if (location != null)
+					{
+						_log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+					}
+					else
+					{
+						_log.Debug("Successfully removed location info for NID=" + nid);
+					}
+				}
 			}
 		}
 	}
