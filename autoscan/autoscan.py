@@ -14,7 +14,9 @@ import re
 #leading characters of a barcode sometimes indicate device type
 product_type_prefixes = {
     'T1' : ('TC-1116', '16'),
+    '1' : ('TC-1116', '16'),
     'T2' : ('TC-1216', '3'),
+    '2' : ('TC-1216', '3'),
     'T3' : ('TC-1120', '39'),
     'T4' : ('TC-1120-RD', '40'),
     'T5' : ('TC-1220', '41'),
@@ -26,8 +28,7 @@ product_type_prefixes = {
 #attempts to connect to database
 def setup_db():
     try:
-        #conn = sqlite3.connect('/var/www/inventory.db')
-        conn = sqlite3.connect('/home/jmorrison/inventory-tester-environment/inventory_tester.db')
+        conn = sqlite3.connect('/var/www/inventory.db')
         print("Connected to database")
     except sqlite3.Error as e:
         print("Error connecting to database: {}".format(e))
