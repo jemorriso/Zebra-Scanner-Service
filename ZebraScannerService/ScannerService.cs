@@ -37,12 +37,15 @@ namespace ZebraScannerService
 	class ScannerService
 	{
 		private static ConnectionInfo ConnInfo;
-		private static ILog _log;
+		private static ILog log;
 		private static SshClient sshclient;
 
 		private static Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>> notifications;
 		private static Dictionary<int, int> prefixes;
 		private static Dictionary<int, ScannerInfo> scanners;
+
+		// see autoscan.py on inventory server for what products these correspond to
+		private static List<string> nidPrefixes = new List<string>() { "T1", "T2", "T3", "T4", "T5", "T6", "TQ", "X1", "1", "2" };
 
 		// set behaviour of scanners
 		public static void ConfigureScanners()
@@ -51,7 +54,6 @@ namespace ZebraScannerService
 
 			// no way to tell which scanner disconnects so reset everything whenever any scanner disconnects
 			// drawback:  events in progress are left incomplete
-			// ***** need to test this
 			prefixes = new Dictionary<int, int>();
 			scanners = new Dictionary<int, ScannerInfo>();
 
@@ -59,9 +61,8 @@ namespace ZebraScannerService
 			// Ensure scanners are attached
 			if (deviceList.Count == 0)
 			{
-				_log.Error("No scanners are attached.");
-
-				_log.Error("No scanners are attached.");
+				log.Error("No scanners are attached.");
+				Console.WriteLine("No scanners are attached.");
 				return;
 			}
 			// want: multipoint-point, low volume, beep / flash green on good decode, mode IBMHID, assign prefix
@@ -70,11 +71,13 @@ namespace ZebraScannerService
 				// if cradle
 				if (scanner.Info.ModelNumber == "CR0078-SC10007WR")
 				{
-					Console.WriteLine("setting hostmode IBMHID");
 					scanner.SetHostMode(HostMode.USB_IBMHID);
 
 					// Set cradle to multipoint-to-point mode, so that up to 3 scanners can be linked to it.
-					scanner.Actions.StoreIBMAttribute(538, DataType.Bool, false);
+					scanner.Actions.StoreIBMAttribute(538, DataType.Bool, true);
+
+					log.Debug("Setting hostmode=USB_IBMHID, communication mode=multipoint-to-point for scanner serial=" + scanner.Info.SerialNumber);
+					Console.WriteLine("Setting hostmode=USB_IBMHID, communication mode=multipoint-to-point for scanner serial=" + scanner.Info.SerialNumber);
 				}
 				// if scanner
 				else
@@ -106,6 +109,10 @@ namespace ZebraScannerService
 							prevScan = null
 						}
 					);
+					log.Debug("Setting default program attributes for scanner serial=" + scanner.Info.SerialNumber);
+					log.Debug("Setting prefix=" + asciiPrefix + " for scanner serial=" + scanner.Info.SerialNumber);
+					Console.WriteLine("Setting default program attributes for scanner serial=" + scanner.Info.SerialNumber);
+					Console.WriteLine("Setting prefix=" + asciiPrefix + " for scanner serial=" + scanner.Info.SerialNumber);
 					asciiPrefix++;
 				}
 			}
@@ -114,30 +121,22 @@ namespace ZebraScannerService
 		public void Start()
 		{
 			// Setup logging
-			_log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
+			log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
 			XmlConfigurator.Configure();
 
 			if (!(BarcodeScannerManager.Instance.Open()))
 			{
-				_log.Fatal("Failed to open CoreScanner driver");
+				log.Fatal("Failed to open CoreScanner driver");
+				Console.WriteLine("Failed to open CoreScanner driver");
 			}
 			else
 			{
-				_log.Debug("CoreScanner driver instance opened");
+				log.Debug("CoreScanner driver instance opened");
+				Console.WriteLine("CoreScanner driver instance opened");
 			}
 
-			//// Setup SSH connection info for remote inventory database access
-			//ConnInfo = new ConnectionInfo("jmorrison", "jmorrison",
-			//	new AuthenticationMethod[] {
-			//		// Password based Authentication
-			//		new PasswordAuthenticationMethod("jmorrison","Pa$$wordjm")
-			//	}
-			//);
-			//_log.Debug("Added SSH connection info: jmorrison@jmorrison");
-
 			//Setup SSH connection info for remote inventory database access
-
-		   ConnInfo = new ConnectionInfo("inventory", "tunet",
+			ConnInfo = new ConnectionInfo("inventory", "tunet",
 			   new AuthenticationMethod[] {
 					// Password based Authentication
 					new PasswordAuthenticationMethod("tunet","tunet")
@@ -147,14 +146,18 @@ namespace ZebraScannerService
 			//sshclient = new SshClient(ConnInfo);
 			sshclient = new SshClient(ConnInfo);
 			CheckSSHConnection();
-			_log.Debug("Added SSH connection info: tunet@inventory");
+			log.Debug("Added SSH connection info: tunet@inventory");
+			Console.WriteLine("Added SSH connection info: tunet@inventory");
 
 			BarcodeScannerManager.Instance.RegisterForEvents(EventType.Barcode, EventType.Pnp);
 			BarcodeScannerManager.Instance.DataReceived += OnDataReceived;
 			BarcodeScannerManager.Instance.ScannerAttached += OnScannerAttached;
 			BarcodeScannerManager.Instance.ScannerDetached += OnScannerDetached;
-			_log.Debug("Subscribed for events in BarcodeScannerManager: CCoreScanner.Barcode, CCoreScanner.Pnp");
-			_log.Debug("Subscribed for events in Main: BarcodeScannerManager.ScannerAttached, BarcodeScannerManager.ScannerDetached");
+
+			log.Debug("Subscribed for events in BarcodeScannerManager: CCoreScanner.Barcode, CCoreScanner.Pnp");
+			log.Debug("Subscribed for events in Main: BarcodeScannerManager.ScannerAttached, BarcodeScannerManager.ScannerDetached");
+			Console.WriteLine("Subscribed for events in BarcodeScannerManager: CCoreScanner.Barcode, CCoreScanner.Pnp");
+			Console.WriteLine("Subscribed for events in Main: BarcodeScannerManager.ScannerAttached, BarcodeScannerManager.ScannerDetached");
 
 			// Add notification beep flash / sequences to notifications dictionary
 			notifications = new Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>>
@@ -169,14 +172,16 @@ namespace ZebraScannerService
 
 		public void Stop()
 		{
-			_log.Debug("Zebra Scanner Service stopped");
+			log.Debug("Zebra Scanner Service stopped");
+			Console.WriteLine("Zebra Scanner Service stopped");
 			sshclient.Disconnect();
 			BarcodeScannerManager.Instance.Close();
 		}
 		// PnpEventArgs: there is no way of telling which scanner attached / detached
 		private static void OnScannerAttached(object sender, PnpEventArgs e)
 		{
-			_log.Debug("Scanner attached");
+			log.Debug("Scanner attached");
+			Console.WriteLine("Scanner attached");
 			// every time scanner is attached, reconfigure all scanners, because there is no guarantee that scanner that has
 			// previously detached has the same id when it reattaches, and we don't have the id of the scanner that has attached.
 			ConfigureScanners();
@@ -184,15 +189,16 @@ namespace ZebraScannerService
 
 		private static void OnScannerDetached(object sender, PnpEventArgs e)
 		{
-			_log.Debug("Scanner detached");
+			log.Debug("Scanner detached");
+			Console.WriteLine("Scanner detached");
 		}
 
 		private static void OnScanTimerElapsed(Object source, System.Timers.ElapsedEventArgs e)
 		{
 			// user didn't scan nid in time. 
 			// case 9/10 : prevScan defined -> undefined
-			Console.WriteLine("timer up!");
-			_log.Error("Timed out waiting for barcode scan event");
+			log.Error("Timed out waiting for barcode scan event");
+			Console.WriteLine("Timed out waiting for barcode scan event");
 
 			SendNotification(((ScannerTimer)source).scannerId, notifications["timerUp"]);
 			scanners[((ScannerTimer)source).scannerId].prevScan = null;
@@ -209,8 +215,8 @@ namespace ZebraScannerService
 
 		private static void OnDataReceived(object sender, BarcodeScanEventArgs e)
 		{  
-			//Console.WriteLine("Barcode scan detected from scanner id=" + e.ScannerId + ": " + e.Data);
-			_log.Debug("Barcode scan detected from scanner id=" + e.ScannerId + ": " + e.Data);
+			Console.WriteLine("Barcode scan detected from scanner id=" + e.ScannerId + ": " + e.Data);
+			log.Debug("Barcode scan detected from scanner id=" + e.ScannerId + ": " + e.Data);
 
 			// get prefix identifier and convert from char to int
 			int prefix = Convert.ToInt32(e.Data[0]);
@@ -222,7 +228,8 @@ namespace ZebraScannerService
 
 			if (barcodeType == BarcodeType.None)
 			{
-				_log.Error("Barcode " + e.Data + " not recognized as location or NID");
+				log.Error("Barcode " + e.Data + " not recognized as location or NID");
+				Console.WriteLine("Barcode " + e.Data + " not recognized as location or NID");
 				SendNotification(scannerId, notifications["barcodeFailure"]);
 			}
 			else
@@ -234,14 +241,14 @@ namespace ZebraScannerService
 				}
 				scanners[scannerId].timer = new ScannerTimer
 				{
-					Interval = 5000,
+					Interval = 30000,
 					AutoReset = false,
 					scannerId = scannerId,
 					ledOff = null
 				};
 				scanners[scannerId].timer.Elapsed += OnScanTimerElapsed;
 
-				_log.Debug("Barcode " + barcode + " recognized as type " + barcodeType);
+				log.Debug("Barcode " + barcode + " recognized as type " + barcodeType);
 				Console.WriteLine("Barcode " + barcode + " recognized as type " + barcodeType);
 
 				// case 1: prevScan: null		current: nid1 		-> prevScan: nid1		timer: start	()
@@ -306,15 +313,34 @@ namespace ZebraScannerService
 			{
 				return BarcodeType.location;
 			}
-			// ert NID is just treated as regular NID by this program
-			else if (EvalRegex(nidFormat, barcode) || EvalRegex(ertFormat, barcode))
-			{
-				return BarcodeType.nid;
-			}
 			else
-			{
-				return BarcodeType.None;
+			{   
+				// longest NIDs have 2 digit prefix + 10 digit NID
+				if (barcode.Length > 12)
+				{
+					return BarcodeType.None;
+				}
+				else
+				{
+					// check NID prefix in list, if it exists
+					string nidPrefix = barcode.Substring(0, barcode.Length - 10);
+					if (nidPrefix.Length > 0 && !nidPrefixes.Contains(nidPrefix)) {
+						log.Error("Unknown NID prefix=" + nidPrefix);
+						Console.WriteLine("Unknown NID prefix=" + nidPrefix);
+						return BarcodeType.None;
+					}
+					// ert NID is just treated as regular NID by this program
+					if (EvalRegex(nidFormat, barcode) || EvalRegex(ertFormat, barcode))
+					{
+						return BarcodeType.nid;
+					}
+					else
+					{
+						return BarcodeType.None;
+					}
+				}
 			}
+
 		}
 
 		public static Boolean EvalRegex(string rxStr, string matchStr)
@@ -360,9 +386,11 @@ namespace ZebraScannerService
 				{
 					sshclient.Connect();
 				}
-				catch (Renci.SshNet.Common.SshConnectionException e)
+				// not sure what exception type will be thrown
+				catch (Exception e)
 				{
-					_log.Fatal("Error establishing connection to inventory server.");
+					log.Fatal("Error establishing connection to inventory server. Exception: " + e);
+					Console.WriteLine("Error establishing connection to inventory server. Exception: " + e);
 					return false;
 				}
 			}
@@ -375,19 +403,9 @@ namespace ZebraScannerService
 			{
 				SendNotification(scannerId, notifications["databaseFailure"]);
 			}
-			using (var cmd = sshclient.CreateCommand("python3 /home/tunet/jmorrison/autoscan.py " + nid + " " + location))
+			using (var cmd = sshclient.CreateCommand("python3 /var/www/scripts/autoscan.py " + nid + " " + location))
 			{
 				cmd.Execute();
-
-				Console.WriteLine("Command>" + cmd.CommandText);
-				Console.WriteLine("Return Value = {0}", cmd.ExitStatus);
-				// user or comment exists on device, so can't take it
-				//if (cmd.ExitStatus == 3)
-				//{
-				//	Console.WriteLine("failed to update db");
-				//	//SendNotification(scannerId, notifications["deviceReserved"]);
-				//	// log
-				//}
 
 				if (cmd.ExitStatus > 0)
 				{
@@ -395,18 +413,20 @@ namespace ZebraScannerService
 					// could not connect to database, or could not commit to database, or something unexpected has occurred
 					if (cmd.ExitStatus == 1)
 					{
-						Console.WriteLine("failed to update db");
-						_log.Fatal("Error connecting to database.");
+						Console.WriteLine("Error connecting to database.");
+						log.Fatal("Error connecting to database.");
 					}
 					else if (cmd.ExitStatus == 2 || cmd.ExitStatus > 0)
 					{
 						if (location != null)
 						{
-							_log.Fatal("Error updating database with location=" + location + ", NID=" + nid);
+							log.Fatal("Error updating database with location=" + location + ", NID=" + nid);
+							Console.WriteLine("Error updating database with location=" + location + ", NID=" + nid);
 						}
 						else
 						{
-							_log.Fatal("Error removing NID=" + nid + " location info from database");
+							log.Fatal("Error removing NID=" + nid + " location info from database");
+							Console.WriteLine("Error removing NID=" + nid + " location info from database");
 						}
 					}
 				}
@@ -414,11 +434,13 @@ namespace ZebraScannerService
 				{
 					if (location != null)
 					{
-						_log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+						log.Debug("Successfully updated database with location=" + location + ", NID=" + nid);
+						Console.WriteLine("Successfully updated database with location=" + location + ", NID=" + nid);
 					}
 					else
 					{
-						_log.Debug("Successfully removed location info for NID=" + nid);
+						log.Debug("Successfully removed location info for NID=" + nid);
+						Console.WriteLine("Successfully removed location info for NID=" + nid);
 					}
 				}
 			}

@@ -11,22 +11,23 @@ namespace ZebraScannerService
 	{
 		static void Main(string[] args)
 		{
-			var rc = HostFactory.Run(x =>                                   //1
+			// setup Topshelf service
+			var rc = HostFactory.Run(x =>                                
 			{
-				x.Service<ScannerService>(s =>                               //2
+				x.Service<ScannerService>(s =>                            
 				{
-					s.ConstructUsing(tc => new ScannerService());   //3
-					s.WhenStarted(tc => tc.Start());                         //4
-					s.WhenStopped(tc => tc.Stop());                          //5
+					s.ConstructUsing(tc => new ScannerService());
+					s.WhenStarted(tc => tc.Start());                      
+					s.WhenStopped(tc => tc.Stop());                       
 				});
-				x.RunAsLocalSystem();                                       //6
+				x.RunAsLocalSystem();                                    
 
 				x.SetDescription("Manages handling of the bluetooth Zebra barcode scanner");
-				x.SetDisplayName("Zebra Barcode Scanner Service");
-				x.SetServiceName("Zebra Barcode Scanner Service");                                  //9
-			});                                                             //10
+				x.SetDisplayName("Zebra Scanner Service");
+				x.SetServiceName("Zebra Scanner Service");                               
+			});                                                           
 
-			var exitCode = (int)Convert.ChangeType(rc, rc.GetTypeCode());  //11
+			var exitCode = (int)Convert.ChangeType(rc, rc.GetTypeCode());
 			Environment.ExitCode = exitCode;
 		}
 	}
