@@ -13,8 +13,6 @@ using log4net;
 using log4net.Config;
 using System.Reflection;
 
-using Microsoft.Win32;
-
 namespace ZebraScannerService
 {
 	// class handles current scanner info related to inventory
@@ -40,11 +38,14 @@ namespace ZebraScannerService
 	{
 		private static ConnectionInfo ConnInfo;
 		private static ILog log;
-		private static SshClient sshclient;
+		private static SshClient sshClient;
 
 		private static Dictionary<string, Tuple<LedMode?, LedMode?, int, BeepPattern?>> notifications;
 		private static Dictionary<int, int> prefixes;
 		private static Dictionary<int, ScannerInfo> scanners;
+		private static Dictionary<int, ScannerInfo> oldScanners;
+
+		private const int timerInterval = 60000;
 
 		// see autoscan.py on inventory server for what products these correspond to
 		private static List<string> nidPrefixes = new List<string>() { "T1", "T2", "T3", "T4", "T5", "T6", "TQ", "X1", "1", "2", "4" };
@@ -101,6 +102,7 @@ namespace ZebraScannerService
 					scanner.Actions.StoreIBMAttribute(105, DataType.Array, asciiPrefix);
 
 					prefixes.Add(asciiPrefix, scanner.Info.ScannerId);
+
 					scanners.Add(
 						scanner.Info.ScannerId,
 						new ScannerInfo
@@ -111,11 +113,38 @@ namespace ZebraScannerService
 							prevScan = null
 						}
 					);
+					// restore saved information for matching scanner
+					if (oldScanners != null)
+					{
+						Console.WriteLine("old scanner detected");
+						RestoreScannerInfo(scanners[scanner.Info.ScannerId]);
+					}
 					log.Debug("Setting default program attributes for scanner serial=" + scanner.Info.SerialNumber);
 					log.Debug("Setting prefix=" + asciiPrefix + " for scanner serial=" + scanner.Info.SerialNumber);
 					Console.WriteLine("Setting default program attributes for scanner serial=" + scanner.Info.SerialNumber);
 					Console.WriteLine("Setting prefix=" + asciiPrefix + " for scanner serial=" + scanner.Info.SerialNumber);
 					asciiPrefix++;
+				}
+			}
+			oldScanners = null;
+		}
+
+		private static void RestoreScannerInfo(ScannerInfo scannerInfo)
+		{
+			foreach(ScannerInfo oldScannerInfo in oldScanners.Values)
+			{
+				if (oldScannerInfo.scanner.Info.SerialNumber == scannerInfo.scanner.Info.SerialNumber)
+				{
+					Console.WriteLine("old scanner info detected: " + oldScannerInfo.prevScan);
+					Console.WriteLine("scanner serial: " + scannerInfo.scanner.Info.SerialNumber);
+					Console.WriteLine("old scanner ID: " + oldScannerInfo.scanner.Info.ScannerId);
+					Console.WriteLine("new scanner ID: " + scannerInfo.scanner.Info.ScannerId);
+
+					scannerInfo.prevScan = oldScannerInfo.prevScan;
+					scannerInfo.timer = oldScannerInfo.timer;
+					// need to change the timer stored ID to the new scanner ID
+					scannerInfo.timer.scannerId = scannerInfo.scanner.Info.ScannerId;
+					return;
 				}
 			}
 		}
@@ -145,7 +174,7 @@ namespace ZebraScannerService
 			   }
 		   );
 
-			//sshclient = new SshClient(ConnInfo);
+			//sshClient = new SshClient(ConnInfo);
 			//CheckSSHConnection();
 			log.Debug("Added SSH connection info: tunet@inventory");
 			Console.WriteLine("Added SSH connection info: tunet@inventory");
@@ -154,10 +183,6 @@ namespace ZebraScannerService
 			BarcodeScannerManager.Instance.DataReceived += OnDataReceived;
 			BarcodeScannerManager.Instance.ScannerAttached += OnScannerAttached;
 			BarcodeScannerManager.Instance.ScannerDetached += OnScannerDetached;
-
-			// subscribe for wake from sleep events to ensure scanner connection available
-			SystemEvents.PowerModeChanged += OnPowerModeChange;
-
 
 			log.Debug("Subscribed for events in BarcodeScannerManager: CCoreScanner.Barcode, CCoreScanner.Pnp");
 			log.Debug("Subscribed for events in Main: BarcodeScannerManager.ScannerAttached, BarcodeScannerManager.ScannerDetached");
@@ -179,22 +204,26 @@ namespace ZebraScannerService
 		{
 			log.Debug("Zebra Scanner Service stopped");
 			Console.WriteLine("Zebra Scanner Service stopped");
-			//sshclient.Disconnect();
+			//sshClient.Disconnect();
 			BarcodeScannerManager.Instance.Close();
 		}
 
-		private static void OnPowerModeChange(object sender, PowerModeChangedEventArgs e)
-		{
-
-		}
 		// PnpEventArgs: there is no way of telling which scanner attached / detached
 		private static void OnScannerAttached(object sender, PnpEventArgs e)
 		{
 			log.Debug("Scanner attached");
 			Console.WriteLine("Scanner attached");
-			// every time scanner is attached, reconfigure all scanners, because there is no guarantee that scanner that has
-			// previously detached has the same id when it reattaches, and we don't have the id of the scanner that has attached.
-			ConfigureScanners();
+
+			// if cradle detaches, when it reattaches this event handler gets called once for cradle, once for scanner.
+			// only want to configure one time.
+			// this needs to be handled for more scanners. Can set 10 second timer to delete oldScanners
+			if (BarcodeScannerManager.Instance.GetDevices().Count > 1)
+			{
+				oldScanners = scanners;
+				// every time scanner is attached, reconfigure all scanners, because there is no guarantee that scanner that has
+				// previously detached has the same id when it reattaches, and we don't have the id of the scanner that has attached.
+				ConfigureScanners();
+			}
 		}
 
 		private static void OnScannerDetached(object sender, PnpEventArgs e)
@@ -252,7 +281,7 @@ namespace ZebraScannerService
 				}
 				scanners[scannerId].timer = new ScannerTimer
 				{
-					Interval = 30000,
+					Interval = timerInterval,
 					AutoReset = false,
 					scannerId = scannerId,
 					ledOff = null
@@ -413,11 +442,11 @@ namespace ZebraScannerService
 		// ensure SSH tunnel is established. If can't connect log error and stop service
 		public static bool CheckSSHConnection()
 		{
-			if (!sshclient.IsConnected)
+			if (!sshClient.IsConnected)
 			{
 				try
 				{
-					sshclient.Connect();
+					sshClient.Connect();
 				}
 				// not sure what exception type will be thrown
 				catch (Exception e)
@@ -437,7 +466,7 @@ namespace ZebraScannerService
 				SendNotification(scannerId, notifications["databaseFailure"]);
 				return;
 			}
-			using (var cmd = sshclient.CreateCommand("python3 /var/www/scripts/autoscan.py " + nid + " " + location))
+			using (var cmd = sshClient.CreateCommand("python3 /var/www/scripts/autoscan.py " + nid + " " + location))
 			{
 				cmd.Execute();
 
