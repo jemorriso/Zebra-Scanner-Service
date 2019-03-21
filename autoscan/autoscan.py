@@ -29,7 +29,8 @@ product_type_prefixes = {
 #attempts to connect to database
 def setup_db():
     try:
-        conn = sqlite3.connect('/var/www/inventory.db')
+        #conn = sqlite3.connect('/var/www/inventory.db')
+        conn = sqlite3.connect('/home/jmorrison/inventory-tester-environment/inventory_tester.db')
         print("Connected to database")
     except sqlite3.Error as e:
         print("Error connecting to database: {}".format(e))
@@ -52,10 +53,11 @@ def parse_socket(barcode):
         'location_prefix' 	: '',
         'form'				: '',
         'voltage'			: '',
-        'read_date'			: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        'read_date'			: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     
-    pillar_format = r'P[NESW][\d]{4}'
+    pillar_format = r'P[NESW]\d{4}'
+    portapillar_format = r'PMM\d0{4}$'
 
     #if on a pillar - do I need others?
     if re.match(pillar_format, barcode):
@@ -63,6 +65,9 @@ def parse_socket(barcode):
         location_data['location_prefix'] = "P-"
         location_data['form'] = barcode[6:-3]
         location_data['voltage'] = barcode [-3:]
+    elif re.match(portapillar_format, barcode):
+        location_data['location'] = barcode[3]
+        location_data['location_prefix'] = "M-"
     else:
         print("Location type not recognized")
         # ***** this should never occur from barcode scanner that passes location ********
@@ -86,27 +91,26 @@ def check_db_for_endpoint(db, nid):
 
 #adds endpoint network ID and socket data to the database
 def add_endpoint(db, data, nid, nid_prefix, nid_in_db):
-
-    query_variables = [data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], nid]
-
+    product_name = ''
+    product_id = ''
     #some barcodes have leading characters indicating product type/id, check for those
     if nid_prefix:
+        try:
+            product_type_prefixes[nid_prefix]
+        except KeyError:
+            print("Product type not recognized.")
+            exit(4)
         product_name, product_id = product_type_prefixes.get(nid_prefix,('',''))
-        query_variables.insert(-1, product_name)
-        query_variables.insert(-1, product_id)
+
+    # query_variables = [data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], nid]
+    query_variables = (data['location_prefix'], data['location'], data['read_date'], data['form'], data['voltage'], product_name, product_id, nid)
 
     #if the nid exists, update it, if not, insert it
     if nid_in_db:
-        if nid_prefix:
-            query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ?, product_name = ?, product_id = ? WHERE network_id = ?"
-        else:
-            query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ? WHERE network_id = ?"
+        query = "UPDATE endpoints SET location_prefix = ?, location = ?, read_date = ?, socket_form = ?, voltage = ?, product_name = ?, product_id = ? WHERE network_id = ?"
 
     else:
-        if nid_prefix:
-            query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, product_name, product_id, network_id) VALUES (?,?,?,?,?,?,?,?)"
-        else:
-            query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, network_id) VALUES (?,?,?,?,?,?)"
+        query = "INSERT INTO endpoints (location_prefix, location, read_date, socket_form, voltage, product_name, product_id, network_id) VALUES (?,?,?,?,?,?,?,?)"
 
     db.cursor().execute(query, query_variables)
     commit(db)
@@ -121,10 +125,11 @@ if __name__=="__main__":
     nid_in_db = check_db_for_endpoint(db, nid)
 
     # Expect 12 digits for most products
+    # 11 digits possible with prefix of 1 digit
     # 10 digits might be WAN NID, could also be ERT type+id
     # 8 digits is ERT
-    if len(endpoint) == 12:
-        nid_prefix = endpoint[:2] 
+    if len(endpoint) > 10:
+        nid_prefix = endpoint[:-10] 
     else:
         nid_prefix = None
 
