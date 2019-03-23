@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.IO;
 
 using Motorola.Snapi;
 using Motorola.Snapi.Constants.Enums;
@@ -8,6 +9,8 @@ using Motorola.Snapi.Constants;
 using Motorola.Snapi.EventArguments;
 
 using Renci.SshNet;
+
+using Newtonsoft.Json;
 
 using log4net;
 using log4net.Config;
@@ -44,8 +47,9 @@ namespace ZebraScannerService
 		private static Dictionary<int, int> prefixes;
 		private static Dictionary<int, ScannerInfo> scanners;
 		private static Dictionary<int, ScannerInfo> oldScanners;
+		private static Dictionary<string, string> inventoryServer;
 
-		private const int timerInterval = 60000;
+		private const int timerInterval = 30000;
 
 		// see autoscan.py on inventory server for what products these correspond to
 		private static List<string> nidPrefixes = new List<string>() { "T1", "T2", "T3", "T4", "T5", "T6", "TQ", "X1", "1", "2", "4" };
@@ -56,7 +60,6 @@ namespace ZebraScannerService
 			int asciiPrefix = 0x61;
 
 			// no way to tell which scanner disconnects so reset everything whenever any scanner disconnects
-			// drawback:  events in progress are left incomplete
 			prefixes = new Dictionary<int, int>();
 			scanners = new Dictionary<int, ScannerInfo>();
 
@@ -126,6 +129,7 @@ namespace ZebraScannerService
 					asciiPrefix++;
 				}
 			}
+			// assumes that only 1 scanner disconnected.
 			oldScanners = null;
 		}
 
@@ -135,10 +139,11 @@ namespace ZebraScannerService
 			{
 				if (oldScannerInfo.scanner.Info.SerialNumber == scannerInfo.scanner.Info.SerialNumber)
 				{
-					Console.WriteLine("old scanner info detected: " + oldScannerInfo.prevScan);
-					Console.WriteLine("scanner serial: " + scannerInfo.scanner.Info.SerialNumber);
-					Console.WriteLine("old scanner ID: " + oldScannerInfo.scanner.Info.ScannerId);
-					Console.WriteLine("new scanner ID: " + scannerInfo.scanner.Info.ScannerId);
+					Console.WriteLine("Scanner info restored after disconnect for scanner serial=" + scannerInfo.scanner.Info.SerialNumber);
+					log.Debug("Scanner info restored after disconnect for scanner serial=" + scannerInfo.scanner.Info.SerialNumber);
+					//Console.WriteLine("scanner serial: " + scannerInfo.scanner.Info.SerialNumber);
+					//Console.WriteLine("old scanner ID: " + oldScannerInfo.scanner.Info.ScannerId);
+					//Console.WriteLine("new scanner ID: " + scannerInfo.scanner.Info.ScannerId);
 
 					scannerInfo.prevScan = oldScannerInfo.prevScan;
 					scannerInfo.timer = oldScannerInfo.timer;
@@ -166,18 +171,21 @@ namespace ZebraScannerService
 				Console.WriteLine("CoreScanner driver instance opened");
 			}
 
+			// read inventory server info from file
+			var text = File.ReadAllText("ScannerConfig.json");
+			inventoryServer = JsonConvert.DeserializeObject<Dictionary<string, string>>(text);
+
 			//Setup SSH connection info for remote inventory database access
-			ConnInfo = new ConnectionInfo("inventory", "tunet",
+			ConnInfo = new ConnectionInfo(inventoryServer["hostname"], inventoryServer["username"],
 			   new AuthenticationMethod[] {
 					// Password based Authentication
-					new PasswordAuthenticationMethod("tunet","tunet")
+					new PasswordAuthenticationMethod(inventoryServer["username"],inventoryServer["password"])
 			   }
-		   );
-
-			//sshClient = new SshClient(ConnInfo);
-			//CheckSSHConnection();
-			log.Debug("Added SSH connection info: tunet@inventory");
-			Console.WriteLine("Added SSH connection info: tunet@inventory");
+			);
+			sshClient = new SshClient(ConnInfo);
+			CheckSSHConnection();
+			log.Debug("Added SSH connection info: " + inventoryServer["username"] + "@" + inventoryServer["hostname"]);
+			Console.WriteLine("Added SSH connection info: " + inventoryServer["username"] + "@" + inventoryServer["hostname"]);
 
 			BarcodeScannerManager.Instance.RegisterForEvents(EventType.Barcode, EventType.Pnp);
 			BarcodeScannerManager.Instance.DataReceived += OnDataReceived;
@@ -204,7 +212,7 @@ namespace ZebraScannerService
 		{
 			log.Debug("Zebra Scanner Service stopped");
 			Console.WriteLine("Zebra Scanner Service stopped");
-			//sshClient.Disconnect();
+			sshClient.Disconnect();
 			BarcodeScannerManager.Instance.Close();
 		}
 
@@ -262,7 +270,6 @@ namespace ZebraScannerService
 			int scannerId = prefixes[prefix];
 
 			// chop prefix off barcode, and convert to uppercase and strip any whitespace
-			
 			string barcode = e.Data.Substring(1).ToUpper().Trim();
 			BarcodeType barcodeType = CheckBarcode(barcode);
 
@@ -322,7 +329,7 @@ namespace ZebraScannerService
 						if (barcode.Equals(scanners[scannerId].prevScan.Item1))
 						{
 							SendNotification(scannerId, notifications["tryDatabase"]);
-							//UpdateDatabase(scannerId, barcode);
+							UpdateDatabase(scannerId, barcode);
 							scanners[scannerId].prevScan = null;
 						}
 						// case 4
@@ -337,7 +344,7 @@ namespace ZebraScannerService
 					{
 						SendNotification(scannerId, notifications["tryDatabase"]);
 						string location = scanners[scannerId].prevScan.Item1;
-						//UpdateDatabase(scannerId, barcode, location);
+						UpdateDatabase(scannerId, barcode, location);
 						// if multiple items are allowed, (only location so far is portapillars) then do not wipe location
 						if (scanners[scannerId].prevScan.Item2 == BarcodeType.location)
 						{
@@ -357,18 +364,18 @@ namespace ZebraScannerService
 		public static BarcodeType CheckBarcode(string barcode)
 		{
 			string locationFormat = @"^P[NESW]\d{4}";
-			string portapillarFormat = @"^PMM(\d)(0){4}$";
+			string portapillarFormat = @"^PMM\d0{4}$";
 			string nidFormat = @"^(\d|[A-F]){10}$";
 			string ertFormat = @"^\d{8}$";
 
-			Console.WriteLine("BARCODE: " + barcode);
+			//Console.WriteLine("BARCODE: " + barcode);
 			if (EvalRegex(locationFormat, barcode))
 			{
 				return BarcodeType.location;
 			}
 			else if (EvalRegex(portapillarFormat, barcode))
 			{
-				Console.WriteLine("found multi");
+				//Console.WriteLine("found multi");
 				return BarcodeType.multiLocation;
 			}
 			else
@@ -376,7 +383,6 @@ namespace ZebraScannerService
 				// longest NIDs have 2 digit prefix + 10 digit NID, shortest NIDs are ERTs, 8 digits
 				if (barcode.Length > 12 || barcode.Length < 8)
 				{
-					Console.WriteLine("barcode type none");
 					return BarcodeType.None;
 				}
 				// remove and check NID prefix - if barcode length > 10, digits at front should only be prefixes
@@ -384,7 +390,6 @@ namespace ZebraScannerService
 				{
 					string nidPrefix = barcode.Substring(0, barcode.Length - 10);
 					barcode = barcode.Substring(barcode.Length - 10);
-					Console.WriteLine("BARCODE: " + barcode);
 
 					if (!nidPrefixes.Contains(nidPrefix))
 					{
@@ -466,7 +471,7 @@ namespace ZebraScannerService
 				SendNotification(scannerId, notifications["databaseFailure"]);
 				return;
 			}
-			using (var cmd = sshClient.CreateCommand("python3 /var/www/scripts/autoscan.py " + nid + " " + location))
+			using (var cmd = sshClient.CreateCommand("python3 " + inventoryServer["inventory_script"] + " " + nid + " " + location))
 			{
 				cmd.Execute();
 
