@@ -18,6 +18,7 @@ product_type_prefixes = {
     'T2' : ('TC-1216', '3'),
     '2' : ('TC-1216', '3'),
     'T3' : ('TC-1120', '39'),
+    '3' : ('TC-1210-RD', '48'),
     'T4' : ('TC-1120-RD', '40'),
     '4' : ('TC-1110-RD', '36'),
     'T5' : ('TC-1220', '41'),
@@ -29,8 +30,7 @@ product_type_prefixes = {
 #attempts to connect to database
 def setup_db():
     try:
-        #conn = sqlite3.connect('/var/www/inventory.db')
-        conn = sqlite3.connect('/home/jmorrison/inventory-tester-environment/inventory_tester.db')
+        conn = sqlite3.connect('/var/www/inventory.db')
         print("Connected to database")
     except sqlite3.Error as e:
         print("Error connecting to database: {}".format(e))

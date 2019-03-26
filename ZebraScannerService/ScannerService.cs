@@ -52,7 +52,7 @@ namespace ZebraScannerService
 		private const int timerInterval = 30000;
 
 		// see autoscan.py on inventory server for what products these correspond to
-		private static List<string> nidPrefixes = new List<string>() { "T1", "T2", "T3", "T4", "T5", "T6", "TQ", "X1", "1", "2", "4" };
+		private static List<string> nidPrefixes = new List<string>() { "T1", "T2", "T3", "T4", "T5", "T6", "TQ", "X1", "1", "2", "3", "4" };
 
 		// set behaviour of scanners
 		public static void ConfigureScanners()
