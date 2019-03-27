@@ -365,6 +365,7 @@ namespace ZebraScannerService
 		{
 			string locationFormat = @"^P[NESW]\d{4}";
 			string portapillarFormat = @"^PMM\d0{4}$";
+			string storageFormat = @"^S\d\d$";
 			string nidFormat = @"^(\d|[A-F]){10}$";
 			string ertFormat = @"^\d{8}$";
 
@@ -373,9 +374,9 @@ namespace ZebraScannerService
 			{
 				return BarcodeType.location;
 			}
-			else if (EvalRegex(portapillarFormat, barcode))
+			else if (EvalRegex(portapillarFormat, barcode) || EvalRegex(storageFormat, barcode))
 			{
-				//Console.WriteLine("found multi");
+				Console.WriteLine("found multi");
 				return BarcodeType.multiLocation;
 			}
 			else
@@ -475,7 +476,8 @@ namespace ZebraScannerService
 			{
 				cmd.Execute();
 
-				if (cmd.ExitStatus > 0)
+				// problem occurred
+				if (cmd.ExitStatus > 0 && cmd.ExitStatus < 10)
 				{
 					SendNotification(scannerId, notifications["databaseFailure"]);
 					// could not connect to database, or could not commit to database, or something unexpected has occurred
@@ -498,6 +500,7 @@ namespace ZebraScannerService
 						}
 					}
 				}
+				// no problem occurred
 				else
 				{
 					if (location != null)
@@ -507,8 +510,16 @@ namespace ZebraScannerService
 					}
 					else
 					{
-						log.Debug("Successfully removed location info for NID=" + nid);
-						Console.WriteLine("Successfully removed location info for NID=" + nid);
+						if (cmd.ExitStatus != 10)
+						{
+							log.Debug("Successfully removed location info for NID=" + nid);
+							Console.WriteLine("Successfully removed location info for NID=" + nid);
+						}
+						else
+						{
+							log.Debug("Attempted remove location info for NID=" + nid + ", but device is not in database.");
+							Console.WriteLine("Attempted remove location info for NID=" + nid + ", but device is not in database.");
+						}
 					}
 				}
 			}
