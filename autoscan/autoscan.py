@@ -70,7 +70,7 @@ def parse_socket(barcode):
         location_data['location'] = barcode[3]
         location_data['location_prefix'] = "M-"
     elif re.match(storage_format, barcode):
-        location_data['location'] = barcode[0]
+        location_data['location'] = barcode[1:]
         location_data['location_prefix'] = "S-"
     else:
         print("Location type not recognized")
