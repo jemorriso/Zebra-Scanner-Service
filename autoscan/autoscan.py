@@ -58,6 +58,7 @@ def parse_socket(barcode):
     
     pillar_format = r'P[NESW]\d{4}'
     portapillar_format = r'PMM\d0{4}$'
+    storage_format = r'S\d\d$'
 
     #if on a pillar - do I need others?
     if re.match(pillar_format, barcode):
@@ -68,6 +69,9 @@ def parse_socket(barcode):
     elif re.match(portapillar_format, barcode):
         location_data['location'] = barcode[3]
         location_data['location_prefix'] = "M-"
+    elif re.match(storage_format, barcode):
+        location_data['location'] = barcode[0]
+        location_data['location_prefix'] = "S-"
     else:
         print("Location type not recognized")
         # ***** this should never occur from barcode scanner that passes location ********
@@ -82,7 +86,7 @@ def wipe_socket(db, location_data):
     commit(db)
 
 def remove_endpoint(db, nid):
-    db.cursor().execute("UPDATE endpoints SET location='' WHERE network_id=?", (nid,))
+    db.cursor().execute("UPDATE endpoints SET location='', location_prefix='' WHERE network_id=?", (nid,))
     commit(db)
 
 def check_db_for_endpoint(db, nid):
@@ -93,7 +97,7 @@ def check_db_for_endpoint(db, nid):
 def add_endpoint(db, data, nid, nid_prefix, nid_in_db):
     product_name = ''
     product_id = ''
-    #some barcodes have leading characters indicating product type/id, check for those
+    # barcode prefix is checked on service side, so exception should never occur here. 
     if nid_prefix:
         try:
             product_type_prefixes[nid_prefix]
@@ -120,7 +124,7 @@ if __name__=="__main__":
     db = setup_db()
 
     endpoint = sys.argv[1]
-    #chop the barcode so it's just the nid
+    #chop the barcode so it's just the nid - works for 8 digit ERTs also
     nid = endpoint[-10:]
     nid_in_db = check_db_for_endpoint(db, nid)
 
@@ -143,3 +147,5 @@ if __name__=="__main__":
         # if nid not in db, do nothing
         if nid_in_db:
             remove_endpoint(db, nid)
+        else:
+            exit(10)
